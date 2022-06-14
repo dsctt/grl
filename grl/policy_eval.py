@@ -1,11 +1,12 @@
 import logging
 
 import numpy as np
+import torch
 
 from .mdp import MDP
 
 class PolicyEval:
-    def __init__(self, amdp, pi):
+    def __init__(self, amdp, pi, verbose=True):
         """
         :param amdp:   AMDP
         :param pi:     A policy
@@ -13,16 +14,20 @@ class PolicyEval:
         self.amdp = amdp
         self.pi_abs = pi
         self.pi_ground = self.amdp.get_ground_policy(pi)
+        self.verbose = verbose
 
-    def run(self, no_gamma):
+    def run(self, no_gamma, pi_abs):
         """
         :param no_gamma: if True, do not discount the weighted average value expectation
         """
+        self.pi_ground - self.amdp.get_ground_policy(pi_abs)
+
         # MC*
         mdp_vals = self.solve_mdp(self.amdp)
         occupancy = self.get_weights(no_gamma)
         amdp_vals = self.solve_amdp(mdp_vals, occupancy)
-        logging.info(f'occupancy:\n {occupancy}')
+        if self.verbose:
+            logging.info(f'occupancy:\n {occupancy}')
 
         # TD
         td_vals = self.solve_mdp(self.create_td_model(occupancy))
@@ -83,10 +88,10 @@ class PolicyEval:
         """
         amdp_vals = np.zeros(self.amdp.n_obs)
         for i in range(self.amdp.n_obs):
-            col = self.amdp.phi[:,i].copy().astype('float')
+            col = self.amdp.phi[:,i].clone().detach()#copy().astype('float')
             col *= weights
             col /= col.sum()
-            v = mdp_vals * col
+            v = torch.tensor(mdp_vals) * col
             amdp_vals[i] += v.sum()
 
         return amdp_vals
@@ -101,25 +106,29 @@ class PolicyEval:
             # phi is |S|x|O|
             ###### curr_a = self.pi[curr_ob]
             # compute p_π(o|s) for all s
-            p_π_of_o_given_s = self.amdp.phi[:, curr_ob].copy().astype('float')
+            p_π_of_o_given_s = self.amdp.phi[:, curr_ob].clone().detach()#copy().astype('float')
             # want p_π(s|o) ∝ p_π(o|s)p(s) = p_π_of_o_given_s * occupancy
-            w = occupancy * p_π_of_o_given_s # Prob of being in each state * prob of it emitting curr obs i
+            w = torch.tensor(occupancy) * p_π_of_o_given_s # Prob of being in each state * prob of it emitting curr obs i
             p_π_of_s_given_o = (w / w.sum())[:,None]
 
             for next_ob in range(self.amdp.n_obs):
                 # Q: what action should this be? [self.pi[i]]
-                p_π_of_op_given_sp = self.amdp.phi[:,next_ob].copy().astype('float')
+                p_π_of_op_given_sp = self.amdp.phi[:,next_ob].clone().detach()#copy().astype('float')
 
                 # T
-                T_contributions = (self.amdp.T * p_π_of_s_given_o * p_π_of_op_given_sp)
+                T_contributions = (torch.tensor(self.amdp.T) * p_π_of_s_given_o * p_π_of_op_given_sp)
                 # sum over s', then over s
                 T_obs_obs[:,curr_ob,next_ob] = T_contributions.sum(2).sum(1)
 
                 # R
-                with np.errstate(invalid='ignore'):
-                    R_contributions = np.nan_to_num(self.amdp.R * T_contributions / T_obs_obs[:,curr_ob,next_ob][:, None, None])
+                R_contributions = torch.tensor(self.amdp.R) * T_contributions 
+                denom = T_obs_obs[:,curr_ob,next_ob][:, None, None]
+                denom = np.where(denom == 0, 1, denom) # Avoid divide by zero
+                R_contributions /= denom
+
                 R_obs_obs[:,curr_ob,next_ob] = R_contributions.sum(2).sum(1)
 
-        logging.info(f'T_bar:\n {T_obs_obs}')
-        logging.info(f'R_bar:\n {R_obs_obs}')
+        if self.verbose:
+            logging.info(f'T_bar:\n {T_obs_obs}')
+            logging.info(f'R_bar:\n {R_obs_obs}')
         return MDP(T_obs_obs, R_obs_obs, self.amdp.gamma)

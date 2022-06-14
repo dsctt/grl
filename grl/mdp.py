@@ -1,6 +1,7 @@
 import copy
 # import gmpy
 import numpy as np
+import torch
 
 def normalize(M, axis=-1):
     M = M.astype(float)
@@ -179,7 +180,7 @@ class AbstractMDP(MDP):
     def __init__(self, base_mdp, phi, pi=None, p0=None, t=200):
         super().__init__(base_mdp.T, base_mdp.R, base_mdp.gamma)
         self.base_mdp = copy.deepcopy(base_mdp)
-        self.phi = phi# array: base_mdp.n_states, n_abstract_states
+        self.phi = torch.tensor(phi)# array: base_mdp.n_states, n_abstract_states
         self.n_obs = phi.shape[-1]
         self.p0 = p0
 
@@ -228,7 +229,7 @@ class AbstractMDP(MDP):
         return (pi @ obs_fn.transpose()).astype(int)
 
     def get_ground_policy(self, pi):
-        return self.phi @ pi
+        return self.phi @ torch.tensor(pi).type(torch.LongTensor)
 
     def abstract_policies(self):
         pi_list = self.piecewise_constant_policies()
