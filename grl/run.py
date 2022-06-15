@@ -4,13 +4,18 @@ import pathlib
 import time
 
 import numpy as np
+import jax.numpy as jnp
+from jax import grad
+from jax.config import config
+config.update("jax_debug_nans", True)
+import torch
 
 from .environment import *
 from .mdp import MDP, AbstractMDP
 from .mc import mc
 from .policy_eval import PolicyEval
 
-def run_algos(spec, no_gamma, n_random_policies, n_steps, max_rollout_steps):
+def run_algos(spec, no_gamma, n_random_policies, grad, n_steps, max_rollout_steps):
     mdp = MDP(spec['T'], spec['R'], spec['gamma'])
     amdp = AbstractMDP(mdp, spec['phi'], p0=spec['p0'])
 
@@ -25,7 +30,7 @@ def run_algos(spec, no_gamma, n_random_policies, n_steps, max_rollout_steps):
         logging.info(f'\nid: {i}')
         logging.info(f'\npi: {pi}')
         pe = PolicyEval(amdp, pi)
-        mdp_vals, amdp_vals, td_vals = pe.run(no_gamma)
+        mdp_vals, amdp_vals, td_vals = pe.run(no_gamma, pi)
         logging.info(f'\nmdp: {mdp_vals}')
         logging.info(f'mc*: {amdp_vals}')
         logging.info(f'td: {td_vals}')
@@ -33,6 +38,9 @@ def run_algos(spec, no_gamma, n_random_policies, n_steps, max_rollout_steps):
 
         if not np.allclose(amdp_vals, td_vals):
             discrepancy_ids.append(i)
+
+            if grad:
+                do_grad(pe, no_gamma, pi)
 
     logging.info('\nTD-MC* Discrepancy ids:')
     if len(discrepancy_ids) > 0:
@@ -63,6 +71,69 @@ def run_algos(spec, no_gamma, n_random_policies, n_steps, max_rollout_steps):
 
     #     logging.info('\n-----------')
 
+def do_gradj(pe, no_gamma, pi_abs, lr=1):
+    def mse_loss(pi):
+        # pe.pi_abs = pi_abs
+        # print('peeeeeee', pe.pi_abs)
+        _, amdp_vals, td_vals = pe.run(no_gamma, pi)
+        # print('valsslsls', amdp_vals, td_vals)
+        diff = amdp_vals - td_vals
+        # print('difffff', diff)
+        return (diff**2).mean()
+
+    print('start pi', pi_abs)
+    pe.verbose = False
+    old_pi = pi_abs
+    i = 0
+    done_count = 0
+    while done_count < 5:
+        i += 1
+        if i % 10 == 0:
+            print('iteration', i)
+
+        pi_grad = grad(mse_loss)(pi_abs)
+        # print('pi_graddd', pi_grad)
+
+        old_pi = pi_abs
+        pi_abs -= lr * pi_grad
+
+        if np.allclose(old_pi, pi_abs):
+            done_count += 1
+        else:
+            done_count = 0
+
+    print('final pi', pi_abs)
+
+    pe.verbose = True
+    mdp_vals, amdp_vals, td_vals = pe.run(no_gamma, pi_abs)
+    print('final vals')
+    print(f'\nmdp: {mdp_vals}')
+    print(f'mc*: {amdp_vals}')
+    print(f'td: {td_vals}')
+
+
+def do_grad(pe, no_gamma, pi_abs):
+    def mse_loss(vals1, vals2):
+        diff = torch.tensor(vals1 - vals2, requires_grad=True)
+        return (diff**2).mean()
+
+    pe.verbose = False
+    pi_abs = torch.tensor(pi_abs)
+    print('pi_abs original', pi_abs)
+    optimizer = torch.optim.SGD([pi_abs], lr=0.01, momentum=0.9)
+
+    for i in range(5):
+        _, amdp_vals, td_vals = pe.run(no_gamma, pi_abs)
+        loss = mse_loss(amdp_vals, td_vals)
+        print('lossssss', loss)
+
+        optimizer.zero_grad()
+        loss.backward()
+        print('graddddd', pi_abs.grad)
+        optimizer.step()
+
+    print('final pi', pi_abs)
+
 if __name__ == '__main__':
     # Usage: python -m grl.run --spec example_11 --log
 
@@ -73,6 +144,7 @@ if __name__ == '__main__':
                         help='do not discount the weighted average value expectation in policy eval')
     parser.add_argument('--n_random_policies', default=0, type=int,
                         help='number of random policies to run--if not set, then use specified Pi_phi instead')
+    parser.add_argument('--grad', action='store_true')
     parser.add_argument('--n_steps', default=20000, type=int,
                         help='number of rollouts to run')
     parser.add_argument('--max_rollout_steps', default=None, type=int,
@@ -107,4 +179,4 @@ if __name__ == '__main__':
 
 
     # Run algos
-    run_algos(spec, args.no_gamma, args.n_random_policies, args.n_steps, args.max_rollout_steps)
+    run_algos(spec, args.no_gamma, args.n_random_policies, args.grad, args.n_steps, args.max_rollout_steps)
