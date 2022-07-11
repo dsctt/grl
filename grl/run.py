@@ -14,6 +14,7 @@ from .mc import mc
 from .policy_eval import PolicyEval
 from .grad import do_grad
 from .utils import pformat_vals, RTOL
+from .solver import solve
 
 def run_algos(spec, no_gamma, n_random_policies, use_grad, n_steps, max_rollout_steps):
     mdp = MDP(spec['T'], spec['R'], spec['gamma'])
@@ -136,6 +137,8 @@ if __name__ == '__main__':
         help='find policy that minimizes any discrepancies by following gradient')
     parser.add_argument('--heatmap', action='store_true',
         help='generate a policy-discrepancy heatmap for the given POMDP')
+    parser.add_argument('--solver', action='store_true',
+        help='')
     parser.add_argument('--n_steps', default=20000, type=int,
         help='number of rollouts to run')
     parser.add_argument('--max_rollout_steps', default=None, type=int,
@@ -153,9 +156,9 @@ if __name__ == '__main__':
 
     logging.basicConfig(format='%(message)s', level=logging.INFO)
     if args.log:
-        pathlib.Path('logs').mkdir(exist_ok=True)
+        pathlib.Path('logs/grl').mkdir(exist_ok=True)
         rootLogger = logging.getLogger()
-        rootLogger.addHandler(logging.FileHandler(f'logs/{args.spec}-{time.time()}.log'))
+        rootLogger.addHandler(logging.FileHandler(f'logs/grl/{args.spec}-{time.time()}.log'))
 
     if args.seed:
         np.random.seed(args.seed)
@@ -163,6 +166,7 @@ if __name__ == '__main__':
 
     # Get POMDP definition
     spec = environment.load_spec(args.spec)
+    spec['name'] = args.spec
     logging.info(f'spec:\n {args.spec}\n')
     logging.info(f'T:\n {spec["T"]}')
     logging.info(f'R:\n {spec["R"]}')
@@ -176,6 +180,8 @@ if __name__ == '__main__':
     # Run
     if args.heatmap:
         heatmap(spec, no_gamma=args.no_gamma)
+    elif args.solver:
+        solve(spec)
     else:
         run_algos(spec, args.no_gamma, args.n_random_policies, args.use_grad, args.n_steps,
                   args.max_rollout_steps)
